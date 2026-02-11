@@ -1,0 +1,29 @@
+{
+  "routines": [
+    {"name": "🌞 Morning Routine", "start": "07:00", "end": "09:00", "fixed": true},
+    {"name": "🍛 Lunch Break", "start": "13:00", "end": "14:00", "fixed": true},
+    {"name": "💤 Night Routine", "start": "22:00", "end": "23:00", "fixed": true}
+  ],
+  "days": {
+    "Monday": {
+      "focus": "Study", 
+      "slots": [
+        {"start": "09:00", "end": "13:00", "category": "Study"},
+        {"start": "14:00", "end": "18:00", "category": "Code"},
+        {"start": "18:00", "end": "21:00", "category": "Chill"}
+      ]
+    },
+    "Tuesday": { "focus": "Study", "slots": [{"start": "09:00", "end": "13:00", "category": "Study"}, {"start": "14:00", "end": "18:00", "category": "Code"}] },
+    "Wednesday": { "focus": "Study", "slots": [{"start": "09:00", "end": "13:00", "category": "Study"}, {"start": "14:00", "end": "18:00", "category": "Code"}] },
+    "Thursday": { "focus": "Study", "slots": [{"start": "09:00", "end": "13:00", "category": "Study"}, {"start": "14:00", "end": "18:00", "category": "Code"}] },
+    "Friday": { "focus": "Code", "slots": [{"start": "09:00", "end": "13:00", "category": "Code"}, {"start": "14:00", "end": "18:00", "category": "Study"}] },
+    "Saturday": { "focus": "Revision", "slots": [{"start": "10:00", "end": "14:00", "category": "Revision"}, {"start": "15:00", "end": "18:00", "category": "Code"}] },
+    "Sunday": { 
+      "focus": "Rest", 
+      "slots": [
+        {"start": "10:00", "end": "12:00", "category": "Revision"},
+        {"start": "12:00", "end": "20:00", "category": "Chill"}
+      ] 
+    }
+  }
+}

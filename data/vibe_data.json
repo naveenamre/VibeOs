@@ -1,0 +1,29 @@
+{
+  "config": {
+    "start_hour": 9,
+    "end_hour": 22
+  },
+  "tasks": [
+    {
+      "id": 1,
+      "name": "Manual Test Task",
+      "duration": 60,
+      "category": "Code",
+      "priority": 5
+    },
+    {
+      "id": 2,
+      "name": "Study Physics",
+      "duration": 120,
+      "category": "Study",
+      "priority": 5
+    },
+    {
+      "id": 3,
+      "name": "Rest & Anime",
+      "duration": 60,
+      "category": "Chill",
+      "priority": 3
+    }
+  ]
+}

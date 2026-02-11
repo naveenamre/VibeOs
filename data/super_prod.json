@@ -1,0 +1,32 @@
+{
+    "config": {
+        "start_hour": 9,
+        "end_hour": 18
+    },
+    "tasks": [
+        {
+            "id": 1,
+            "name": "RGPV Chemistry Study",
+            "duration": 120,
+            "priority": 5
+        },
+        {
+            "id": 2,
+            "name": "VibeOS Coding",
+            "duration": 90,
+            "priority": 4
+        },
+        {
+            "id": 3,
+            "name": "Lunch Break",
+            "duration": 45,
+            "priority": 5
+        },
+        {
+            "id": 4,
+            "name": "Moringa Farm Plan",
+            "duration": 60,
+            "priority": 3
+        }
+    ]
+}
