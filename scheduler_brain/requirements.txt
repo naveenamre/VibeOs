@@ -1,2 +1,4 @@
 flask
 ortools
+psycopg2-binary 
+requests

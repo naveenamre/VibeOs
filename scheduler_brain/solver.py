@@ -74,23 +74,32 @@ def solve_schedule(data):
         task_starts[t_id] = start_var
         task_intervals[t_id] = interval_var
 
-        # --- SMART ALLOCATION (The Magic) ---
-        # Task Category match karo Day Slots se
+        # --- SMART ALLOCATION (The Magic v2.0 - With Backlog Logic) ---
         task_cat = task.get('category', 'Default')
+        is_backlog = task.get('is_backlog', False) # Check backlog status
         
         # Is din ke slots check karo
         if 'slots' in day_rules:
             valid_slots = []
             for slot in day_rules['slots']:
-                # Agar category match kare (e.g., Study task in Study Slot)
-                if slot['category'].lower() == task_cat.lower():
+                slot_type = slot['category'].lower()
+                target_type = task_cat.lower()
+                
+                # Rule 1: Category Match (Study == Study)
+                match = (slot_type == target_type)
+                
+                # Rule 2: Backlog Exception (Agar backlog hai, toh 'chill' slot chura lo)
+                if is_backlog and slot_type == 'chill':
+                    match = True
+                    print(f"⚠️ Backlog detected for {task['name']}. Allowing Chill slot.")
+
+                if match:
                     s_start = get_minutes(slot['start']) - day_start
                     s_end = get_minutes(slot['end']) - day_start
                     if s_start >= 0:
                         valid_slots.append((s_start, s_end))
             
             # Agar matching slots mile, toh task ko wahi force karo (Soft Constraint)
-            # Logic: Task ka Start Time, kisi ek valid slot ke andar hona chahiye
             if valid_slots:
                 # Bools banayenge: "Is task in Slot A?" OR "Is task in Slot B?"
                 slot_bools = []
@@ -106,9 +115,6 @@ def solve_schedule(data):
                     model.Add(sum(slot_bools) >= 1)
 
     # Constraint: No Overlap
-    # (Note: Routines ko bhi overlap list mein daalna chahiye, par abhi simple rakhte hain)
-    # Behtar: Routines ke liye fixed intervals banaye, OR-Tools 'AddNoOverlap' mein sab daal sakta hai
-    # Lekin Fixed Interval variable store nahi kiye, toh simple approach:
     # Routines ko 'Blocked Time' maante hain.
     
     # Conflict check with Routines (Manual)

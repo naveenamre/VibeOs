@@ -5,25 +5,30 @@
   },
   "tasks": [
     {
-      "id": 1,
-      "name": "Manual Test Task",
-      "duration": 60,
-      "category": "Code",
-      "priority": 5
-    },
-    {
-      "id": 2,
-      "name": "Study Physics",
-      "duration": 120,
+      "id": "gen_01",
+      "name": "Regular Chemistry Session (Slot Filler)",
+      "duration": 240,
       "category": "Study",
-      "priority": 5
+      "priority": 3,
+      "dependency": null
     },
     {
-      "id": 3,
-      "name": "Rest & Anime",
+      "id": "gen_02",
+      "name": "Backlog: Physics Derivations (Urgent)",
+      "duration": 60,
+      "category": "Study",
+      "priority": 5,
+      "dependency": null,
+      "is_backlog": true
+    },
+    {
+      "id": "gen_03",
+      "name": "Evening Gaming / Anime",
       "duration": 60,
       "category": "Chill",
-      "priority": 3
+      "priority": 2,
+      "dependency": null
     }
   ]
 }
+

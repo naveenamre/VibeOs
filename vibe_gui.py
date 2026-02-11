@@ -2,6 +2,7 @@ import customtkinter as ctk
 import requests
 import json
 import os
+import time  # <--- Added for Date Logic
 from tkinter import messagebox, filedialog
 import threading
 
@@ -98,55 +99,79 @@ class VibeSchedulerApp(ctk.CTk):
             
             # 2. Parse Super Productivity Logic
             new_tasks = []
-            
-            # Super Prod tasks are stored in a 'tasks' dictionary or list inside keys
-            # Structure change ho sakta hai, hum safe try karenge
             raw_tasks = []
             
-            # Structure A: Direct List
+            # Structure check logic
             if isinstance(sp_data, list): raw_tasks = sp_data
-            # Structure B: Dict with 'tasks' key
             elif 'tasks' in sp_data:
-                # Kabhi list hota hai, kabhi dict ID wise
                 if isinstance(sp_data['tasks'], dict):
                     raw_tasks = sp_data['tasks'].values()
                 else:
                     raw_tasks = sp_data['tasks']
             
+            # --- DATE LOGIC SETUP ---
+            current_time_ms = int(time.time() * 1000)
+            TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000
+
             # 3. Conversion Loop
             task_id = 1
+            backlog_count = 0
+
             for t in raw_tasks:
                 # Sirf wo tasks lo jo DONE nahi hain
                 if t.get('isDone', False) == False:
                     # Time Estimate (ms -> min)
                     time_ms = t.get('timeEstimate', 0)
                     duration_min = int(time_ms / 60000)
-                    
-                    if duration_min == 0: duration_min = 30 # Default 30 min agar time nahi diya
+                    if duration_min == 0: duration_min = 30 
 
                     # Category Guessing
                     title = t.get('title', 'Unknown Task')
                     cat = "Default"
-                    if "Study" in title: cat = "Study"
-                    elif "Code" in title: cat = "Code"
+                    if "Study" in title or "Unit" in title: cat = "Study"
+                    elif "Code" in title or "VibeOS" in title: cat = "Code"
+                    
+                    # --- BACKLOG LOGIC ---
+                    created_at = t.get('created', current_time_ms)
+                    age_ms = current_time_ms - created_at
+                    
+                    priority = 3
+                    is_backlog = False
+
+                    if age_ms > TWO_DAYS_MS:
+                        priority = 5      # Urgent ban gaya
+                        title = f"🔥 {title}"  # Visual Mark
+                        is_backlog = True
+                        backlog_count += 1
                     
                     new_tasks.append({
                         "id": task_id,
                         "name": title,
                         "duration": duration_min,
-                        "priority": 3, # Default priority
-                        "category": cat
+                        "priority": priority,
+                        "category": cat,
+                        "is_backlog": is_backlog # Brain ko batane ke liye
                     })
                     task_id += 1
             
             # 4. Update Editor
             current_text = self.json_editor.get("0.0", "end")
-            current_json = json.loads(current_text)
+            # Safe parsing
+            try:
+                current_json = json.loads(current_text)
+            except:
+                current_json = {"config": {"start_hour": 9, "end_hour": 18}, "tasks": []}
+
             current_json['tasks'] = new_tasks
             
             self.json_editor.delete("0.0", "end")
             self.json_editor.insert("0.0", json.dumps(current_json, indent=4))
-            messagebox.showinfo("Import Success", f"Imported {len(new_tasks)} tasks from Super Productivity!")
+            
+            msg = f"Imported {len(new_tasks)} tasks!"
+            if backlog_count > 0:
+                msg += f"\n⚠️ {backlog_count} Backlog Tasks Detected (Marked 🔥)"
+            
+            messagebox.showinfo("Import Success", msg)
 
         except Exception as e:
             messagebox.showerror("Import Error", f"Failed to parse: {str(e)}")
