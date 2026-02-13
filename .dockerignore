@@ -1,0 +1,13 @@
+.git
+.next
+node_modules
+.turbo
+.cache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env*
+.DS_Store
+coverage
+.vscode
+*.log 

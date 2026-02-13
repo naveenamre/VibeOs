@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: vibeos_n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_SECURE_COOKIE=false
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168 # 1 Week logs
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # IMPORTANT: Hum pura VibeOS folder n8n ke andar mount kar rahe hain
+      # Taaki n8n humare Python scripts ko access kar sake
+      - ./:/home/node/vibeos
+      # Python install karne ke liye (Agar n8n image mein python nahi hua toh)
+      # Usually hum custom image banate hain, par abhi ke liye 'Execute Command' use karenge
+    restart: always
+
+volumes:
+  n8n_data:
