@@ -1,47 +1,83 @@
 from datetime import datetime, timedelta, timezone
 
 def to_utc_iso(dt_local):
-    """
-    Convert Local Time (IST) to UTC ISO format for Database.
-    Subtracts 5:30 hours.
-    """
+    """IST to UTC for Database storage"""
+    # Local time se 5:30 ghante ghatao taaki Calendar par sahi dikhe
+    # Assumes dt_local is naive IST
     dt_utc = dt_local - timedelta(hours=5, minutes=30)
     return dt_utc.replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 def to_iso_now():
-    """Current UTC time string"""
+    """Current UTC time in ISO format (Required for DB timestamps)"""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-def flatten_template_to_slots(week_template, start_date, days_ahead=14):
+def flatten_template_to_slots(week_template, start_date, days_ahead=7):
     """
-    Converts 'Monday: 9am' -> '2026-02-16 09:00:00'
-    Generates actual time slots for the next X days.
+    Parses Week Template into actionable Time Slots.
+    Handles 'Tuesday': 'Monday' references intelligently.
+    🛡️ Now includes De-duplication logic to prevent double booking.
     """
     slots = []
     current = start_date
     
+    # 1. Get Current Mode Logic
+    mode_name = week_template.get("current_mode", "Normal")
+    modes = week_template.get("modes", {})
+    active_schedule = modes.get(mode_name, {})
+    
+    # Track unique slots to prevent overlaps (e.g., if template has duplicates)
+    seen_times = set()
+
+    print(f"   📅 Generating Slots for Mode: {mode_name}")
+
     for _ in range(days_ahead):
         day_name = current.strftime("%A")
         date_str = current.strftime("%Y-%m-%d")
         
-        if day_name in week_template:
-            for s in week_template[day_name]:
+        # 2. Get Day Schedule
+        day_config = active_schedule.get(day_name)
+
+        # --- SMART REFERENCE CHECK ---
+        # Agar "Tuesday": "Monday" likha hai, toh Monday ka data uthao
+        if isinstance(day_config, str):
+            ref_day = day_config
+            day_config = active_schedule.get(ref_day)
+        
+        # Agar data list hai, tabhi process karo
+        if isinstance(day_config, list):
+            for s in day_config:
                 try:
-                    # Combine Date + Time
+                    # Time Parsing
                     start_dt = datetime.strptime(f"{date_str} {s['start']}", "%Y-%m-%d %H:%M")
-                    end_dt = start_dt + timedelta(minutes=s['duration'])
+                    end_dt = datetime.strptime(f"{date_str} {s['end']}", "%Y-%m-%d %H:%M")
+                    
+                    # Handle Midnight Crossing (23:30 to 00:00)
+                    if end_dt < start_dt:
+                        end_dt += timedelta(days=1)
+
+                    # 🛡️ DE-DUPLICATION LOGIC (The Fix)
+                    # Hum check karte hain ki kya ye time slot pehle hi add ho chuka hai?
+                    time_key = start_dt.isoformat()
+                    
+                    if time_key in seen_times:
+                        continue # Skip duplicate slot
+                    
+                    seen_times.add(time_key)
+
+                    duration_mins = int((end_dt - start_dt).total_seconds() / 60)
                     
                     slots.append({
                         "start": start_dt,
                         "end": end_dt,
-                        "category": s['category'],
-                        "duration": s['duration']
+                        "duration": duration_mins,
+                        "category": s.get('category', 'General'),
+                        "energy_supply": s.get('energy_supply', 'Medium')
                     })
-                except ValueError:
-                    print(f"⚠️ Invalid time format in template for {day_name}")
+                except ValueError as e:
+                    print(f"   ⚠️ Invalid time format in {day_name}: {e}")
                     
         current += timedelta(days=1)
     
-    # Sort slots by time (Crucial for sequencing)
+    # Sort slots by time (Zaroori hai sequence ke liye)
     slots.sort(key=lambda x: x['start'])
     return slots

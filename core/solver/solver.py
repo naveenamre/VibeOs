@@ -1,134 +1,141 @@
 from ortools.sat.python import cp_model
-from datetime import datetime, timedelta
-import collections
+from datetime import timedelta
 
 class VibeOptimizer:
     def __init__(self, tasks, slots):
-        """
-        tasks: List [{'name': '...', 'duration': 60, 'category': 'Code', 'group_id': 1, 'order': 1}]
-        slots: List [{'start': datetime_obj, 'end': datetime_obj, 'category': 'Code'}]
-        """
         self.tasks = tasks
         self.slots = slots
         self.model = cp_model.CpModel()
         self.solver = cp_model.CpSolver()
-        self.solution = []
 
     def solve(self):
-        print(f"🧠 OR-Tools Optimizing: {len(self.tasks)} Tasks into {len(self.slots)} Slots...")
-
-        # --- VARIABLES ---
-        # allocation[(task_idx, slot_idx)] = BoolVar (Is task T in slot S?)
-        allocation = {}
+        print(f"   🧠 OR-Tools Optimizing: {len(self.tasks)} Tasks into {len(self.slots)} Slots...")
         
-        # Helper to track which slot a task is assigned to (for ordering constraints)
-        task_slot_indices = {} 
+        # Data Structures
+        allocation = {}      # (t_idx, s_idx) -> BoolVar
+        task_intervals = []  # List of IntervalVars for NoOverlap constraint
+        
+        # Energy Scoring Map
+        energy_map = {"High": 3, "Medium": 2, "Low": 1, "Any": 2}
 
+        # 1. CREATE VARIABLES
         for t_idx, task in enumerate(self.tasks):
-            # Optimization: Sirf matching category aur fitting duration wale slots hi consider karo
-            # Isse memory bachegi aur speed badhegi
-            valid_slots = []
+            possible_slots = []
+            
+            # Task Data
+            t_duration = task.get('duration', 60)
+            t_type = task.get('task_type', 'Flexible')
+            t_fixed_slot = task.get('fixed_slot')
+            t_cat = task.get('category', 'General')
             
             for s_idx, slot in enumerate(self.slots):
-                # 1. Category Match
-                if slot['category'] != task['category']:
+                # Slot Data
+                s_duration = slot.get('duration', 0)
+                s_start = slot['start']
+                s_cat = slot.get('category', 'General')
+                s_start_str = s_start.strftime("%H:%M")
+
+                # --- HARD FILTERS ---
+                
+                # Filter 1: Duration (Slot must be big enough)
+                if s_duration < t_duration:
+                    continue
+
+                # Filter 2: Fixed Tasks
+                if t_type == 'Fixed' and t_fixed_slot != s_start_str:
                     continue
                 
-                # 2. Duration Match (Slot bada ya barabar hona chahiye)
-                slot_duration_mins = (slot['end'] - slot['start']).total_seconds() / 60
-                if slot_duration_mins < task['duration']:
+                # Filter 3: Category Match (Flexible tasks stick to their zones)
+                if t_type == 'Flexible' and s_cat != t_cat:
                     continue
-                
-                # Agar fit hai, toh variable banao
-                is_assigned = self.model.NewBoolVar(f't{t_idx}_s{s_idx}')
-                allocation[(t_idx, s_idx)] = is_assigned
-                valid_slots.append(is_assigned)
-            
-            # Constraint 1: Har Task ko MAXIMUM 1 Slot milna chahiye
-            # (Agar slots full hain, toh shayad task assign na ho paye - Backlog)
-            if valid_slots:
-                self.model.Add(sum(valid_slots) <= 1)
-                # Ideally we want it to be == 1, but <= 1 prevents crash if slots are full
-                # We add a maximization objective later to force assignment.
-            else:
-                print(f"   ⚠️ Impossible to fit: {task['name']} (No matching slots found)")
 
-        # Constraint 2: Slot Capacity (No Overlap)
-        # Ek slot mein ek hi task (Simple logic for V1)
-        # Future mein hum 'packing' kar sakte hain, abhi 1 Slot = 1 Task rakhte hain safety ke liye.
-        for s_idx in range(len(self.slots)):
-            tasks_in_slot = []
-            for t_idx in range(len(self.tasks)):
-                if (t_idx, s_idx) in allocation:
-                    tasks_in_slot.append(allocation[(t_idx, s_idx)])
-            
-            if tasks_in_slot:
-                self.model.Add(sum(tasks_in_slot) <= 1)
+                # ✅ CREATE DECISION VARIABLE
+                # BoolVar: "Kya Task T, Slot S mein jayega?"
+                is_present = self.model.NewBoolVar(f't{t_idx}_s{s_idx}')
+                allocation[(t_idx, s_idx)] = is_present
+                possible_slots.append(is_present)
 
-        # Constraint 3: Sequence Handling (Dependency)
-        # Group ID same hai toh Order 1 pehle aana chahiye Order 2 se.
-        # Group tasks together
-        tasks_by_group = collections.defaultdict(list)
-        for t_idx, task in enumerate(self.tasks):
-            tasks_by_group[task['group_id']].append((t_idx, task['order']))
+                # 🌟 CRITICAL: INTERVAL VARIABLE FOR NO-OVERLAP
+                # Hum model ko bata rahe hain: "Agar ye task select hua, toh ye time block reserve kar lo"
+                
+                # Convert Start Time to integer (Minutes timestamp)
+                # Hum timestamp use kar rahe hain taaki absolute comparison ho sake
+                start_min = int(s_start.timestamp() / 60) 
+                
+                # End Time Variable (Start + Duration)
+                end_var = self.model.NewIntVar(start_min + t_duration, start_min + t_duration, f'end_{t_idx}_{s_idx}')
+                
+                # Create Optional Interval
+                # Ye tabhi active hoga jab is_present == True hoga
+                interval = self.model.NewOptionalIntervalVar(
+                    start_min,          # Start Time (Integer)
+                    t_duration,         # Size (Duration)
+                    end_var,            # End Time
+                    is_present,         # Active Flag
+                    f'interval_t{t_idx}_s{s_idx}'
+                )
+                task_intervals.append(interval)
 
-        for group_id, task_list in tasks_by_group.items():
-            # Sort by order (1, 2, 3...)
-            task_list.sort(key=lambda x: x[1])
-            
-            for i in range(len(task_list) - 1):
-                t1_idx = task_list[i][0]
-                t2_idx = task_list[i+1][0]
-                
-                # Logic: Agar dono assigned hain, toh Slot1_Index < Slot2_Index hona chahiye
-                # (Assuming slots are sorted by time)
-                
-                # Hum model mein imply karte hain:
-                # If T1 in S_a AND T2 in S_b => a < b
-                
-                for (t1, s1), var1 in allocation.items():
-                    if t1 != t1_idx: continue
-                    
-                    for (t2, s2), var2 in allocation.items():
-                        if t2 != t2_idx: continue
-                        
-                        # Constraint: s1 index must be less than s2 index
-                        if s1 >= s2:
-                            # Ye combination illegal hai
-                            # Model ko bolo: var1 aur var2 dono 1 nahi ho sakte
-                            self.model.AddBoolOr([var1.Not(), var2.Not()])
+            # Constraint: Task can be in AT MOST 1 slot
+            if possible_slots:
+                self.model.Add(sum(possible_slots) <= 1)
+        
+        # 🛡️ THE ULTIMATE SHIELD: NO OVERLAP
+        # Ye line ensure karti hai ki koi bhi do selected intervals overlap na karein.
+        # Chaahe slot duplicate ho ya kuch bhi ho, agar time same hai toh clash nahi hoga.
+        self.model.AddNoOverlap(task_intervals)
 
-        # --- OBJECTIVE ---
-        # 1. Maximize number of assigned tasks
-        # 2. Prefer earlier slots (Minimize slot index)
+        # 2. OBJECTIVE FUNCTION (SCORING) 🎯
         objective_terms = []
         for (t_idx, s_idx), var in allocation.items():
-            # Big reward for assigning task (1000 points)
-            # Small penalty for later slots (minus s_idx) -> Encourages early completion
-            weight = 1000 - s_idx 
-            objective_terms.append(var * weight)
-        
+            task = self.tasks[t_idx]
+            slot = self.slots[s_idx]
+            
+            t_prio = task.get('priority', 1)
+            t_energy = task.get('energy_req', 'Medium')
+            s_energy = slot.get('energy_supply', 'Medium')
+
+            # Base Score (Schedule karna hi apne aap mein jeet hai)
+            score = 10000 
+            
+            # Priority Bonus (High Prio wins conflicts)
+            # Increased weight to 5000 to ensure Priority > Slot Order
+            score += t_prio * 5000 
+            
+            # Energy Match
+            req = energy_map.get(t_energy, 2)
+            sup = energy_map.get(s_energy, 2)
+            if req == sup: score += 500
+            elif req > sup: score -= 1000 # Penalty
+            else: score += 100
+            
+            # Urgency: Prefer earlier slots (Tomorrow < Next Week)
+            # s_idx jitna chhota, utna better.
+            score -= s_idx * 10 
+
+            objective_terms.append(var * score)
+
         self.model.Maximize(sum(objective_terms))
 
-        # --- SOLVE ---
+        # 3. SOLVE
         status = self.solver.Solve(self.model)
-
-        final_schedule = []
-        if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-            print("   ✅ Solution Found!")
-            
+        schedule = []
+        
+        if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+            print(f"   ✅ Solution Found! (Score: {self.solver.ObjectiveValue()})")
             for (t_idx, s_idx), var in allocation.items():
                 if self.solver.Value(var) == 1:
                     slot = self.slots[s_idx]
                     task = self.tasks[t_idx]
                     
-                    # Create Scheduled Item
-                    final_schedule.append({
-                        "title": task['name'],
+                    schedule.append({
+                        "task_id": task.get('id'),
+                        "name": task.get('name'),
                         "start": slot['start'],
-                        "end": slot['start'] + timedelta(minutes=task['duration'])
+                        "end": slot['start'] + timedelta(minutes=task.get('duration', 60)),
+                        "slot_energy": slot.get('energy_supply', 'Medium')
                     })
         else:
-            print("   ❌ No Solution Found.")
-        
-        return final_schedule
+            print("   ⚠️ No feasible solution found. Tasks will remain in Backlog.")
+            
+        return schedule
