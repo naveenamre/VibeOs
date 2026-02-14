@@ -31,7 +31,8 @@ def get_file_priority(filename):
     return None # Return None if no prefix found
 
 def ensure_schema(cursor):
-    """Jugaad to ensure Projects table exists without running full setup"""
+    """Ensures tables exist with all required columns"""
+    # Projects Table
     cursor.execute('''CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY,
         name TEXT,
@@ -42,11 +43,31 @@ def ensure_schema(cursor):
         reality_factor REAL DEFAULT 1.0
     )''')
     
-    # Ensure Tasks table has project_id column
-    # (Simple check: Try adding it, ignore if exists - but for now assuming tasks table exists)
+    # Tasks Table (Updated with all flexible fields)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY, 
+        project_id TEXT, 
+        name TEXT, 
+        status TEXT DEFAULT 'PENDING',
+        category TEXT, 
+        priority INTEGER, 
+        duration INTEGER, 
+        actual_duration INTEGER,
+        energy_req TEXT,
+        task_type TEXT, 
+        fixed_slot TEXT, 
+        dependency TEXT, 
+        deadline_offset INTEGER,
+        notes TEXT,
+        scheduled_start TEXT, 
+        calendar_event_id TEXT, 
+        idempotency_key TEXT,
+        is_soft_deleted INTEGER DEFAULT 0, 
+        created_at TEXT
+    )''')
 
 def ingest_data():
-    print("📥 Starting VibeOS Ingestion (Enterprise Mode)...")
+    print("📥 Starting VibeOS Ingestion (Pro Mode)...")
     
     if not os.path.exists(INPUTS_DIR):
         print("❌ Inputs folder missing.")
@@ -63,7 +84,7 @@ def ingest_data():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # 🔥 Auto-Create Projects Table if missing
+    # 🔥 Auto-Create Tables if missing
     ensure_schema(cursor)
 
     new_tasks_count = 0
@@ -73,21 +94,22 @@ def ingest_data():
             with open(file_path, "r", encoding='utf-8') as f:
                 data = json.load(f)
                 
-            # --- 0. CALCULATE FILE PRIORITY ---
+            # --- 0. EXTRACT METADATA ---
             file_prio = get_file_priority(file_path)
-                
-            # --- 1. PROCESS PROJECT ---
-            p_name = data.get("project_name", "General Project")
-            p_category = data.get("category", "General")
             
-            # Agar file name mein '1_' hai toh wo priority use karo, warna JSON wali
+            p_name = data.get("project_name", "General Project")
+            
+            # 🔥 SMART CATEGORY: Use 'default_category' (New) or fallback to 'category' (Old)
+            p_category = data.get("default_category", data.get("category", "General"))
+            
             p_priority = file_prio if file_prio else data.get("priority", 1)
+            p_tag = data.get("project_tag", "General") # Just for logs/reference
             
             color = data.get("color", "#FFFFFF")
             tags = ",".join(data.get("tags", []))
             p_reality = data.get("reality_factor", 1.0) 
 
-            # Upsert Project
+            # --- 1. PROCESS PROJECT ---
             cursor.execute("SELECT id FROM projects WHERE name = ?", (p_name,))
             row = cursor.fetchone()
             
@@ -103,14 +125,14 @@ def ingest_data():
                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
                     (project_id, p_name, p_category, p_priority, color, tags, p_reality)
                 )
-                print(f"   🆕 Project: {p_name} (Prio: {p_priority})")
+                print(f"   🆕 Project: {p_name} (Cat: {p_category})")
 
             # --- 2. PROCESS TASKS ---
             tasks = data.get("tasks", [])
             for task in tasks:
                 t_name = task.get("name")
                 
-                # Deduplication Check
+                # Deduplication Check (Same name in same project = Skip)
                 cursor.execute("SELECT id FROM tasks WHERE name = ? AND project_id = ?", (t_name, project_id))
                 if cursor.fetchone():
                     continue 
@@ -127,13 +149,13 @@ def ingest_data():
                 offset = task.get("deadline_offset_days", 0)
                 notes = task.get("notes", "")
                 
+                # Task category inherits from Project Default if not specified
                 t_category = task.get("category", p_category)
-                # Task priority inherits from Project/File unless overridden
                 t_priority = task.get("priority", p_priority)
 
                 initial_status = 'BLOCKED' if dependency else 'PENDING'
 
-                # 🛡️ THE MEGA INSERT
+                # 🛡️ THE MEGA INSERT (Matches New Schema)
                 cursor.execute('''
                     INSERT INTO tasks (
                         id, project_id, name, status, 
@@ -141,9 +163,9 @@ def ingest_data():
                         category, priority, 
                         duration, actual_duration, energy_req, 
                         task_type, fixed_slot, dependency, 
-                        deadline_offset, notes
+                        deadline_offset, notes, created_at
                     )
-                    VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, datetime('now'))
                 ''', (
                     task_id, project_id, t_name, initial_status,
                     idempotency_key,
@@ -163,7 +185,7 @@ def ingest_data():
     conn.close()
     
     if new_tasks_count > 0:
-        print(f"✅ Ingestion Done. {new_tasks_count} tasks loaded.")
+        print(f"✅ Ingestion Done. {new_tasks_count} new tasks loaded.")
     else:
         print("💤 System up to date.")
 

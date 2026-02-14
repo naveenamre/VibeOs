@@ -15,9 +15,11 @@ def flatten_template_to_slots(week_template, start_date, days_ahead=7):
     """
     Parses Week Template into actionable Time Slots.
     Handles 'Tuesday': 'Monday' references intelligently.
-    🛡️ Now includes De-duplication logic to prevent double booking.
+    🛡️ PRESERVED: De-duplication logic to prevent double booking.
+    🔥 NEW: Separates 'Constant' blocks from 'Free' slots.
     """
-    slots = []
+    free_slots = []
+    constant_blocks = []
     current = start_date
     
     # 1. Get Current Mode Logic
@@ -55,7 +57,7 @@ def flatten_template_to_slots(week_template, start_date, days_ahead=7):
                     if end_dt < start_dt:
                         end_dt += timedelta(days=1)
 
-                    # 🛡️ DE-DUPLICATION LOGIC (The Fix)
+                    # 🛡️ DE-DUPLICATION LOGIC (As requested, untouched)
                     # Hum check karte hain ki kya ye time slot pehle hi add ho chuka hai?
                     time_key = start_dt.isoformat()
                     
@@ -65,19 +67,31 @@ def flatten_template_to_slots(week_template, start_date, days_ahead=7):
                     seen_times.add(time_key)
 
                     duration_mins = int((end_dt - start_dt).total_seconds() / 60)
+                    category = s.get('category', 'General')
                     
-                    slots.append({
+                    item = {
                         "start": start_dt,
                         "end": end_dt,
                         "duration": duration_mins,
-                        "category": s.get('category', 'General'),
-                        "energy_supply": s.get('energy_supply', 'Medium')
-                    })
+                        "category": category,
+                        "label": s.get('label', category),
+                        "energy_supply": s.get('energy_supply', 'Medium'),
+                        "notes": s.get('notes', "")
+                    }
+
+                    # 🛑 SEPARATION LOGIC (New)
+                    if category == "Constant":
+                        constant_blocks.append(item)
+                    else:
+                        free_slots.append(item)
+
                 except ValueError as e:
                     print(f"   ⚠️ Invalid time format in {day_name}: {e}")
                     
         current += timedelta(days=1)
     
     # Sort slots by time (Zaroori hai sequence ke liye)
-    slots.sort(key=lambda x: x['start'])
-    return slots
+    free_slots.sort(key=lambda x: x['start'])
+    constant_blocks.sort(key=lambda x: x['start'])
+    
+    return free_slots, constant_blocks

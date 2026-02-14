@@ -34,6 +34,9 @@ class VibeOptimizer:
                 s_start = slot['start']
                 s_cat = slot.get('category', 'General')
                 s_start_str = s_start.strftime("%H:%M")
+                
+                # Check Day
+                is_weekend = s_start.weekday() >= 5 # 5=Saturday, 6=Sunday
 
                 # --- HARD FILTERS ---
                 
@@ -46,33 +49,28 @@ class VibeOptimizer:
                     continue
                 
                 # Filter 3: Category Match (Flexible tasks stick to their zones)
-                if t_type == 'Flexible' and s_cat != t_cat:
+                # 'Free' slots are Wildcards, BUT...
+                if t_type == 'Flexible':
+                    if s_cat != 'Free' and s_cat != t_cat:
+                        continue
+
+                # 🔥 Filter 4: WEEKEND GUARD (No Lectures on Sat/Sun)
+                # Lectures (Study/Learn) sirf Mon-Fri honge.
+                # Weekends par sirf Project/Code/General allow karenge.
+                if is_weekend and t_cat in ['Study', 'Learn']:
                     continue
 
                 # ✅ CREATE DECISION VARIABLE
-                # BoolVar: "Kya Task T, Slot S mein jayega?"
                 is_present = self.model.NewBoolVar(f't{t_idx}_s{s_idx}')
                 allocation[(t_idx, s_idx)] = is_present
                 possible_slots.append(is_present)
 
-                # 🌟 CRITICAL: INTERVAL VARIABLE FOR NO-OVERLAP
-                # Hum model ko bata rahe hain: "Agar ye task select hua, toh ye time block reserve kar lo"
-                
-                # Convert Start Time to integer (Minutes timestamp)
-                # Hum timestamp use kar rahe hain taaki absolute comparison ho sake
+                # 🌟 INTERVAL VARIABLE FOR NO-OVERLAP
                 start_min = int(s_start.timestamp() / 60) 
-                
-                # End Time Variable (Start + Duration)
                 end_var = self.model.NewIntVar(start_min + t_duration, start_min + t_duration, f'end_{t_idx}_{s_idx}')
                 
-                # Create Optional Interval
-                # Ye tabhi active hoga jab is_present == True hoga
                 interval = self.model.NewOptionalIntervalVar(
-                    start_min,          # Start Time (Integer)
-                    t_duration,         # Size (Duration)
-                    end_var,            # End Time
-                    is_present,         # Active Flag
-                    f'interval_t{t_idx}_s{s_idx}'
+                    start_min, t_duration, end_var, is_present, f'interval_t{t_idx}_s{s_idx}'
                 )
                 task_intervals.append(interval)
 
@@ -80,12 +78,11 @@ class VibeOptimizer:
             if possible_slots:
                 self.model.Add(sum(possible_slots) <= 1)
         
-        # 🛡️ THE ULTIMATE SHIELD: NO OVERLAP
-        # Ye line ensure karti hai ki koi bhi do selected intervals overlap na karein.
-        # Chaahe slot duplicate ho ya kuch bhi ho, agar time same hai toh clash nahi hoga.
-        self.model.AddNoOverlap(task_intervals)
+        # 🛡️ STRICT NO OVERLAP
+        if task_intervals:
+            self.model.AddNoOverlap(task_intervals)
 
-        # 2. OBJECTIVE FUNCTION (SCORING) 🎯
+        # 2. SCORING OBJECTIVES
         objective_terms = []
         for (t_idx, s_idx), var in allocation.items():
             task = self.tasks[t_idx]
@@ -95,27 +92,24 @@ class VibeOptimizer:
             t_energy = task.get('energy_req', 'Medium')
             s_energy = slot.get('energy_supply', 'Medium')
 
-            # Base Score (Schedule karna hi apne aap mein jeet hai)
+            # Base Score
             score = 10000 
-            
-            # Priority Bonus (High Prio wins conflicts)
-            # Increased weight to 5000 to ensure Priority > Slot Order
             score += t_prio * 5000 
             
             # Energy Match
             req = energy_map.get(t_energy, 2)
             sup = energy_map.get(s_energy, 2)
             if req == sup: score += 500
-            elif req > sup: score -= 1000 # Penalty
+            elif req > sup: score -= 1000
             else: score += 100
             
-            # Urgency: Prefer earlier slots (Tomorrow < Next Week)
-            # s_idx jitna chhota, utna better.
+            # Urgency (Early slots better)
             score -= s_idx * 10 
 
             objective_terms.append(var * score)
 
-        self.model.Maximize(sum(objective_terms))
+        if objective_terms:
+            self.model.Maximize(sum(objective_terms))
 
         # 3. SOLVE
         status = self.solver.Solve(self.model)
@@ -127,7 +121,6 @@ class VibeOptimizer:
                 if self.solver.Value(var) == 1:
                     slot = self.slots[s_idx]
                     task = self.tasks[t_idx]
-                    
                     schedule.append({
                         "task_id": task.get('id'),
                         "name": task.get('name'),
@@ -136,6 +129,6 @@ class VibeOptimizer:
                         "slot_energy": slot.get('energy_supply', 'Medium')
                     })
         else:
-            print("   ⚠️ No feasible solution found. Tasks will remain in Backlog.")
+            print("   ⚠️ No feasible solution found for this batch.")
             
         return schedule

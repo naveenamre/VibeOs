@@ -10,59 +10,60 @@ class VibeArchitect:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def get_daily_batch(self, limit_per_category=2):
+    def get_balanced_batch(self, limit_per_subject=1):
         """
-        Ye function decide karta hai ki AAJ kaunse tasks schedule hone chahiye.
-        Pura backlog nahi uthata, sirf 'Paced' batch uthata hai.
+        Selects tasks for a single day based on 'Drip Feed' logic.
+        Ensures we don't burnout on one subject (e.g. 1 Japanese, 1 C++ per day).
+        Returns: (daily_batch, remaining_backlog)
         """
         conn = self.get_db_connection()
         cursor = conn.cursor()
 
-        print("   🏗️  Architect: Reviewing Backlog for Daily Batch...")
+        print("   🏗️  Architect: Analyzing Backlog for Balanced Pacing...")
 
         # 1. Fetch ALL Pending Tasks (Sorted by Priority)
-        # Hum 'is_soft_deleted=0' check kar rahe hain taaki deleted tasks wapas na aayein
+        # Higher priority first, then older created_at
         cursor.execute("""
             SELECT * FROM tasks 
             WHERE status = 'PENDING' AND is_soft_deleted = 0
             ORDER BY priority DESC, created_at ASC
         """)
         all_tasks = [dict(row) for row in cursor.fetchall()]
+        conn.close()
         
         if not all_tasks:
-            conn.close()
-            return []
+            return [], []
 
-        # 2. APPLY PACING RULES (The "Thoda-Thoda" Logic) 🐢
-        # Hum har category se sirf limited tasks uthayenge
-        
+        # 2. FILTER FOR BALANCE (The Smart Selector)
         daily_batch = []
-        category_counts = {}
+        remaining = []
         
-        # Custom Limits (Future mein config se aa sakta hai)
-        limits = {
-            "Language": 1,   # Roz 1 Lecture
-            "Study": 2,      # Roz 2 Study Sessions
-            "Code": 2,       # Roz 2 Code Sessions
-            "Project": 1,    # Roz 1 Project Task
-            "General": 3     # Chote mote kaam
-        }
+        # Track usage per "Subject" to enforce limit
+        # Key format: "Category_Subject" (e.g., "Learn_Japanese", "Code_VibeOS")
+        used_keys = {} 
 
         for task in all_tasks:
             cat = task.get('category', 'General')
-            limit = limits.get(cat, limit_per_category)
+            name = task.get('name', '')
             
-            # Counter initialize
-            if cat not in category_counts:
-                category_counts[cat] = 0
+            # Smart Subject Detection: First word of name is usually the subject
+            # e.g. "Japanese Lecture 1" -> "Japanese"
+            # e.g. "C++ Lecture 2" -> "C++"
+            subject = name.split()[0] if ' ' in name else 'Gen'
             
-            # Agar limit bachi hai, toh task utha lo
-            if category_counts[cat] < limit:
-                daily_batch.append(task)
-                category_counts[cat] += 1
-        
-        print(f"   🏗️  Architect: Selected {len(daily_batch)} tasks from {len(all_tasks)} pending items.")
-        print(f"       (Breakdown: {category_counts})")
+            # Unique Key for pacing
+            key = f"{cat}_{subject}"
 
-        conn.close()
-        return daily_batch
+            # Check limit
+            current_count = used_keys.get(key, 0)
+            
+            if current_count < limit_per_subject:
+                daily_batch.append(task)
+                used_keys[key] = current_count + 1
+            else:
+                # Agar aaj ka quota full hai, toh backlog mein daalo (for next days)
+                remaining.append(task)
+        
+        print(f"   🏗️  Architect: Selected {len(daily_batch)} tasks for today. (Backlog: {len(remaining)})")
+        
+        return daily_batch, remaining
