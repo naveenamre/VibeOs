@@ -1,114 +1,122 @@
-# VibeOS_2026/core/solver/engine.py
 import sys
-import json
-from ortools.sat.python import cp_model
-# Note: Hum relative import use nahi kar rahe taaki direct run kar sakein
-try:
-    from masks import get_weekly_template
-except ImportError:
-    from core.solver.masks import get_weekly_template
+import os
+import sqlite3
+import uuid
+from datetime import datetime, timedelta
 
-def solve_schedule(tasks, day_name="Monday"):
-    # 1. Initialize Model
-    model = cp_model.CpModel()
-    horizon = 24 * 60  # 1440 minutes in a day
-    
-    # 2. Get The Rules (Template)
-    template_blocks = get_weekly_template(day_name)
-    
-    # 3. Create Variables
-    task_vars = {}
-    intervals = []
-    
-    # Helper: Convert Hour to Minute
-    def h_to_m(h): return h * 60
+# --- PATH SETUP ---
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(BASE_DIR)
+FLUID_DB_PATH = os.path.join(BASE_DIR, "gui", "fluid-calendar", "prisma", "dev.dbcd")
 
-    # --- LOGIC START ---
-    for task in tasks:
-        t_id = task['id']
-        duration = task['duration']
-        category = task.get('category', 'Any')
-        
-        # Variable: Start & End Time
-        start_var = model.NewIntVar(0, horizon, f'start_{t_id}')
-        end_var = model.NewIntVar(0, horizon, f'end_{t_id}')
-        interval_var = model.NewIntervalVar(start_var, duration, end_var, f'interval_{t_id}')
-        
-        task_vars[t_id] = {"start": start_var, "end": end_var}
-        intervals.append(interval_var)
-        
-        # CONSTRAINT 1: Template Matching
-        valid_slots = []
-        
-        for block in template_blocks:
-            # Match Logic: Agar Block type aur Task category same hai (ya Any hai)
-            if block['type'] == category or block['type'] == "Any" or category == "Any":
-                
-                b_start = h_to_m(block['start'])
-                b_end = h_to_m(block['end'])
-                
-                # Check if block is big enough
-                if (b_end - b_start) >= duration:
-                    is_in_block = model.NewBoolVar(f'{t_id}_in_{block["start"]}')
-                    
-                    # Logic: Task Start >= Block Start  AND  Task End <= Block End
-                    model.Add(start_var >= b_start).OnlyEnforceIf(is_in_block)
-                    model.Add(end_var <= b_end).OnlyEnforceIf(is_in_block)
-                    
-                    valid_slots.append(is_in_block)
-        
-        if valid_slots:
-            # Task must fit in AT LEAST one valid block
-            model.Add(sum(valid_slots) >= 1)
-        else:
-            print(f"⚠️ Warning: No space for task {task['name']} ({category})")
+# --- IMPORTS ---
+from core.loader.task_loader import load_all_inputs
+from core.loader.config_loader import load_week_template
+from core.solver.solver import VibeOptimizer
+from core.solver.utils import flatten_template_to_slots, to_utc_iso, to_iso_now
 
-    # CONSTRAINT 2: No Overlap
-    model.AddNoOverlap(intervals)
-    
-    # OBJECTIVE: Minimize gaps (Pack tightly)
-    makespan = model.NewIntVar(0, horizon, 'makespan')
-    model.AddMaxEquality(makespan, [v["end"] for v in task_vars.values()])
-    model.Minimize(makespan)
-    
-    # --- SOLVE ---
-    solver = cp_model.CpSolver()
-    status = solver.Solve(model)
-    
-    schedule = []
-    if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-        for task in tasks:
-            t_id = task['id']
-            if t_id in task_vars:
-                start_val = solver.Value(task_vars[t_id]["start"])
-                
-                # Convert back to HH:MM
-                h = start_val // 60
-                m = start_val % 60
-                time_str = f"{h:02d}:{m:02d}"
-                
-                schedule.append({
-                    "id": t_id,
-                    "name": task['name'],
-                    "start": time_str,
-                    "duration": task['duration'],
-                    "category": task.get('category', 'Any')
-                })
-        schedule.sort(key=lambda x: x['start'])
-        return schedule
+def get_db_connection():
+    return sqlite3.connect(FLUID_DB_PATH)
+
+def run_orchestrator():
+    print("\n🚀 VibeOS Engine Starting...")
+
+    # 1. LOAD DATA (Inputs & Config)
+    tasks_raw = load_all_inputs()
+    week_template = load_week_template()
+
+    if not tasks_raw:
+        print("❌ No tasks found. Add JSON files to 'data/inputs/'")
+        return
+
+    # 2. SETUP DATABASE & FEED
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Get User ID
+    cursor.execute("SELECT id FROM User LIMIT 1")
+    user_row = cursor.fetchone()
+    if not user_row:
+        print("❌ System Error: No User found in Fluid Calendar DB.")
+        return
+    user_id = user_row[0]
+
+    # Get/Create VibeOS Feed
+    cursor.execute("SELECT id FROM CalendarFeed WHERE name = 'VibeOS' AND userId = ?", (user_id,))
+    row = cursor.fetchone()
+    if row:
+        feed_id = row[0]
     else:
-        return {"error": "No Solution Found"}
+        feed_id = str(uuid.uuid4())
+        cursor.execute("INSERT INTO CalendarFeed (id, name, type, enabled, userId, createdAt, updatedAt) VALUES (?, 'VibeOS', 'LOCAL', 1, ?, ?, ?)", 
+                       (feed_id, user_id, to_iso_now(), to_iso_now()))
 
-# --- TEST RUNNER ---
-if __name__ == "__main__":
-    # Dummy Input
-    test_tasks = [
-        {"id": 1, "name": "Physics Derivations", "duration": 60, "category": "Study"},
-        {"id": 2, "name": "VibeOS Coding", "duration": 90, "category": "Code"},
-        {"id": 3, "name": "Anime Episode", "duration": 30, "category": "Chill"},
-        {"id": 4, "name": "Maths Problems", "duration": 60, "category": "Study"}
-    ]
+    # 3. PREPARE TASKS FOR SOLVER
+    # (Flatten courses into individual task items)
+    tasks_to_schedule = []
     
-    print("🧠 Running VibeOS Engine on Monday Template...")
-    result = solve_schedule(test_tasks, day_name="Monday")
-    print(json.dumps(result, indent=4))
+    print("🔍 Checking for duplicates...")
+    for group_idx, course in enumerate(tasks_raw):
+        course_name = course.get("course_name", "Unknown")
+        category = course.get("category", "General")
+        
+        for order_idx, subtask in enumerate(course.get("subtasks", [])):
+            full_title = f"{course_name}: {subtask['topic']}"
+            
+            # Check DB for Duplicates (Smart Check)
+            cursor.execute("SELECT id FROM CalendarEvent WHERE title = ? AND feedId = ?", (full_title, feed_id))
+            if cursor.fetchone():
+                continue # Skip if already scheduled
+            
+            tasks_to_schedule.append({
+                "name": full_title,
+                "duration": subtask['duration'],
+                "category": category,
+                "group_id": group_idx, # Sequence maintain karne ke liye
+                "order": order_idx,
+                "feedId": feed_id
+            })
+
+    if not tasks_to_schedule:
+        print("✨ All tasks are up to date! Nothing new to plan.")
+        conn.close()
+        return
+
+    # 4. GENERATE SLOTS (Next 14 Days)
+    now = datetime.now()
+    if now.hour > 20: now += timedelta(days=1) # Agar raat hai toh kal se shuru karo
+    
+    available_slots = flatten_template_to_slots(week_template, now, days_ahead=14)
+
+    if not available_slots:
+        print("❌ Error: No slots available in Week Template.")
+        return
+
+    # 5. RUN SOLVER (The Brain) 🧠
+    optimizer = VibeOptimizer(tasks_to_schedule, available_slots)
+    schedule_result = optimizer.solve()
+
+    # 6. SAVE RESULTS TO DB
+    new_count = 0
+    if schedule_result:
+        for item in schedule_result:
+            event_id = str(uuid.uuid4())
+            cursor.execute('''
+                INSERT INTO CalendarEvent (id, feedId, title, start, end, allDay, createdAt, updatedAt)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+            ''', (
+                event_id, feed_id, item['title'], 
+                to_utc_iso(item['start']), to_utc_iso(item['end']),
+                to_iso_now(), to_iso_now()
+            ))
+            print(f"   🗓️  Booked: {item['title']} -> {item['start'].strftime('%a %H:%M')}")
+            new_count += 1
+    else:
+        print("⚠️  Optimizer could not find a solution (Check slot durations/categories).")
+
+    conn.commit()
+    conn.close()
+    print(f"\n✅ Engine Finished. Scheduled {new_count} new tasks.")
+
+if __name__ == "__main__":
+    run_orchestrator()
