@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
 import dynamic from "next/dynamic";
 
 import { DndProvider } from "@/components/dnd/DndProvider";
@@ -10,16 +9,12 @@ import { PrivacyProvider } from "@/components/providers/PrivacyProvider";
 import { SessionProvider } from "@/components/providers/SessionProvider";
 import { SetupCheck } from "@/components/setup/SetupCheck";
 import { CommandPalette } from "@/components/ui/command-palette";
-import { CommandPaletteFab } from "@/components/ui/command-palette-fab";
 import { CommandPaletteHint } from "@/components/ui/command-palette-hint";
+import { CommandPaletteFab } from "@/components/ui/command-palette-fab"; // Fab added based on your snippet
 import { ShortcutsModal } from "@/components/ui/shortcuts-modal";
-import { Toaster } from "@/components/ui/sonner";
 
 import { usePageTitle } from "@/hooks/use-page-title";
-
 import { useShortcutsStore } from "@/store/shortcuts";
-
-import "../globals.css";
 
 // Dynamically import the NotificationProvider based on SAAS flag
 const NotificationProvider = dynamic<{ children: React.ReactNode }>(
@@ -37,14 +32,13 @@ const NotificationProvider = dynamic<{ children: React.ReactNode }>(
   }
 );
 
-export default function RootLayout({
+export default function CommonLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  const { isOpen: shortcutsOpen, setOpen: setShortcutsOpen } =
-    useShortcutsStore();
+  const { isOpen: shortcutsOpen, setOpen: setShortcutsOpen } = useShortcutsStore();
 
   // Use the page title hook
   usePageTitle();
@@ -65,29 +59,41 @@ export default function RootLayout({
   }, [setShortcutsOpen]);
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <SessionProvider>
-        <PrivacyProvider>
-          <DndProvider>
-            <SetupCheck />
-            <CommandPalette
-              open={commandPaletteOpen}
-              onOpenChange={setCommandPaletteOpen}
-            />
-            <CommandPaletteHint />
-            <CommandPaletteFab />
-            <ShortcutsModal
-              isOpen={shortcutsOpen}
-              onClose={() => setShortcutsOpen(false)}
-            />
+    <SessionProvider>
+      <PrivacyProvider>
+        <DndProvider>
+          {/* System Checks & Modals */}
+          <SetupCheck />
+          
+          <CommandPalette
+            open={commandPaletteOpen}
+            onOpenChange={setCommandPaletteOpen}
+          />
+          <CommandPaletteHint />
+          <CommandPaletteFab /> 
+          
+          <ShortcutsModal
+            isOpen={shortcutsOpen}
+            onClose={() => setShortcutsOpen(false)}
+          />
+
+          {/* 🔥 MAIN LAYOUT STRUCTURE (Top Bar Style) */}
+          {/* Changed from default flex-row to flex-col for Top Navigation */}
+          <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+            
+            {/* 1. Top Navigation */}
             <AppNav />
-            <main className="relative flex-1">
-              <NotificationProvider>{children}</NotificationProvider>
+
+            {/* 2. Main Content (Scrollable) */}
+            <main className="flex-1 overflow-auto relative flex flex-col">
+              <NotificationProvider>
+                {children}
+              </NotificationProvider>
             </main>
-            <Toaster />
-          </DndProvider>
-        </PrivacyProvider>
-      </SessionProvider>
-    </div>
+            
+          </div>
+        </DndProvider>
+      </PrivacyProvider>
+    </SessionProvider>
   );
 }

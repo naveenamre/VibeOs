@@ -1,9 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Suspense } from "react";
-
-import dynamic from "next/dynamic";
+// Removed Waitlist Imports to fix build error (since files were deleted)
 
 import { AccountManager } from "@/components/settings/AccountManager";
 import { AutoScheduleSettings } from "@/components/settings/AutoScheduleSettings";
@@ -18,28 +16,13 @@ import { UserSettings } from "@/components/settings/UserSettings";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
-import { isSaasEnabled } from "@/lib/config";
 import { cn } from "@/lib/utils";
 
 import { useAdmin } from "@/hooks/use-admin";
 
 import { useSettingsStore } from "@/store/settings";
 
-// Add dynamic import for the waitlist page
-const WaitlistPage = dynamic(
-  () =>
-    import(
-      `./waitlist/page${
-        process.env.NEXT_PUBLIC_ENABLE_SAAS_FEATURES === "true"
-          ? ".saas"
-          : ".open"
-      }`
-    ),
-  {
-    loading: () => <p>Loading...</p>,
-  }
-);
-
+// --- TYPES ---
 type SettingsTab =
   | "accounts"
   | "user"
@@ -49,7 +32,6 @@ type SettingsTab =
   | "task-sync"
   | "logs"
   | "user-management"
-  | "waitlist"
   | "import-export"
   | "admin-dashboard"
   | "notifications";
@@ -64,6 +46,7 @@ export default function SettingsPage() {
     initializeSettings();
   }, [initializeSettings]);
 
+  // --- TABS CONFIGURATION ---
   const tabs = useMemo(() => {
     const baseTabs = [
       { id: "accounts", label: "Accounts" },
@@ -83,16 +66,8 @@ export default function SettingsPage() {
         { id: "user-management", label: "Users" },
       ] as const;
 
-      // Only add the waitlist tab if SAAS features are enabled
-      if (isSaasEnabled) {
-        return [
-          ...baseTabs,
-          ...adminTabs,
-          { id: "waitlist", label: "Beta Waitlist" },
-          { id: "admin-dashboard", label: "Admin Dashboard" },
-        ] as const;
-      }
-
+      // Note: Waitlist removed from here because files are deleted
+      
       return [...baseTabs, ...adminTabs] as const;
     }
 
@@ -101,12 +76,11 @@ export default function SettingsPage() {
 
   const [activeTab, setActiveTab] = useState<SettingsTab>("accounts");
 
-  // Check initial hash and handle changes
+  // --- HASH HANDLING ---
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.slice(1) as SettingsTab;
 
-      // Check if the hash is a valid tab ID, regardless of admin status
       const allPossibleTabIds: SettingsTab[] = [
         "accounts",
         "user",
@@ -116,7 +90,6 @@ export default function SettingsPage() {
         "system",
         "logs",
         "user-management",
-        "waitlist",
         "import-export",
         "admin-dashboard",
         "notifications",
@@ -127,37 +100,30 @@ export default function SettingsPage() {
       }
     };
 
-    // Handle initial hash
     handleHashChange();
-
-    // Listen for hash changes
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
-  }, []); // Remove tabs dependency since we're now checking against all possible tabs
+  }, []);
 
-  // Set hydrated state after mount
   useEffect(() => {
     setIsHydrated(true);
   }, []);
 
-  // Update hash when tab changes
   useEffect(() => {
     if (isHydrated) {
       window.location.hash = activeTab;
     }
   }, [activeTab, isHydrated]);
 
+  // --- CONTENT RENDERER ---
   const renderContent = () => {
-    // Admin-only tabs
     const adminOnlyTabs = [
       "system",
       "logs",
       "user-management",
-      "waitlist",
       "admin-dashboard",
     ];
 
-    // If admin status is still loading and the active tab is admin-only, show loading state
     if (adminOnlyTabs.includes(activeTab) && isAdminLoading) {
       return (
         <div className="flex flex-col items-center justify-center p-8 text-center">
@@ -166,7 +132,6 @@ export default function SettingsPage() {
       );
     }
 
-    // Check if the active tab is admin-only and the user is not an admin
     if (adminOnlyTabs.includes(activeTab) && !isAdmin) {
       return (
         <div className="flex flex-col items-center justify-center p-8 text-center">
@@ -199,12 +164,6 @@ export default function SettingsPage() {
         return <UserManagement />;
       case "import-export":
         return <ImportExportSettings />;
-      case "waitlist":
-        return (
-          <Suspense fallback={<div>Loading...</div>}>
-            <WaitlistPage />
-          </Suspense>
-        );
       case "admin-dashboard":
         return (
           <div className="flex flex-col items-center justify-center p-8 text-center">
@@ -225,6 +184,8 @@ export default function SettingsPage() {
   return (
     <div className="container py-6">
       <div className="flex flex-col lg:flex-row lg:space-x-12 lg:space-y-0">
+        
+        {/* Sidebar Navigation */}
         <aside className="lg:w-1/5">
           <Card>
             <nav className="space-y-1 p-1">
@@ -250,6 +211,8 @@ export default function SettingsPage() {
             </nav>
           </Card>
         </aside>
+
+        {/* Content Area */}
         <div className="mt-6 flex-1 lg:mt-0">
           <div className="space-y-6">
             <div className={cn("space-y-8", !isHydrated && "opacity-0")}>
