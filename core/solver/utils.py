@@ -15,20 +15,18 @@ def flatten_template_to_slots(week_template, start_date, days_ahead=7):
     """
     Parses Week Template into actionable Time Slots.
     Handles 'Tuesday': 'Monday' references intelligently.
-    🛡️ PRESERVED: De-duplication logic to prevent double booking.
-    🔥 NEW: Separates 'Constant' blocks from 'Free' slots.
+    🛡️ PRESERVED: De-duplication logic.
+    🔥 NEW: 'Busy Mask' logic to prevent Free slots overlapping with Constant blocks.
     """
     free_slots = []
     constant_blocks = []
-    current = start_date
     
     # 1. Get Current Mode Logic
     mode_name = week_template.get("current_mode", "Normal")
     modes = week_template.get("modes", {})
     active_schedule = modes.get(mode_name, {})
     
-    # Track unique slots to prevent overlaps (e.g., if template has duplicates)
-    seen_times = set()
+    current = start_date
 
     print(f"   📅 Generating Slots for Mode: {mode_name}")
 
@@ -39,58 +37,83 @@ def flatten_template_to_slots(week_template, start_date, days_ahead=7):
         # 2. Get Day Schedule
         day_config = active_schedule.get(day_name)
 
-        # --- SMART REFERENCE CHECK ---
-        # Agar "Tuesday": "Monday" likha hai, toh Monday ka data uthao
+        # Reference Check ("Tuesday": "Monday")
         if isinstance(day_config, str):
             ref_day = day_config
             day_config = active_schedule.get(ref_day)
         
-        # Agar data list hai, tabhi process karo
-        if isinstance(day_config, list):
-            for s in day_config:
-                try:
-                    # Time Parsing
-                    start_dt = datetime.strptime(f"{date_str} {s['start']}", "%Y-%m-%d %H:%M")
-                    end_dt = datetime.strptime(f"{date_str} {s['end']}", "%Y-%m-%d %H:%M")
-                    
-                    # Handle Midnight Crossing (23:30 to 00:00)
-                    if end_dt < start_dt:
-                        end_dt += timedelta(days=1)
+        if not day_config or not isinstance(day_config, list):
+            current += timedelta(days=1)
+            continue
 
-                    # 🛡️ DE-DUPLICATION LOGIC (As requested, untouched)
-                    # Hum check karte hain ki kya ye time slot pehle hi add ho chuka hai?
-                    time_key = start_dt.isoformat()
-                    
-                    if time_key in seen_times:
-                        continue # Skip duplicate slot
-                    
+        # --- STEP A: Parse All Raw Blocks ---
+        daily_items = []
+        for s in day_config:
+            try:
+                # Time Parsing
+                start_dt = datetime.strptime(f"{date_str} {s['start']}", "%Y-%m-%d %H:%M")
+                end_dt = datetime.strptime(f"{date_str} {s['end']}", "%Y-%m-%d %H:%M")
+                
+                # Handle Midnight Crossing
+                if end_dt < start_dt:
+                    end_dt += timedelta(days=1)
+
+                duration_mins = int((end_dt - start_dt).total_seconds() / 60)
+                category = s.get('category', 'General')
+                
+                item = {
+                    "start": start_dt,
+                    "end": end_dt,
+                    "duration": duration_mins,
+                    "category": category,
+                    "label": s.get('label', category),
+                    "energy_supply": s.get('energy_supply', 'Medium'),
+                    "notes": s.get('notes', "")
+                }
+                daily_items.append(item)
+
+            except ValueError as e:
+                print(f"   ⚠️ Invalid time format in {day_name}: {e}")
+
+        # --- STEP B: Separate Constant & Build Mask ---
+        # Constant blocks are King. They reserve the time first.
+        occupied_ranges = []
+        seen_times = set() # Local dedupe per day for exact duplicates
+
+        for item in daily_items:
+            time_key = item['start'].isoformat()
+            
+            if item["category"] == "Constant":
+                # Add to constant list
+                if time_key not in seen_times:
+                    constant_blocks.append(item)
+                    occupied_ranges.append((item["start"], item["end"]))
                     seen_times.add(time_key)
 
-                    duration_mins = int((end_dt - start_dt).total_seconds() / 60)
-                    category = s.get('category', 'General')
-                    
-                    item = {
-                        "start": start_dt,
-                        "end": end_dt,
-                        "duration": duration_mins,
-                        "category": category,
-                        "label": s.get('label', category),
-                        "energy_supply": s.get('energy_supply', 'Medium'),
-                        "notes": s.get('notes', "")
-                    }
+        # --- STEP C: Filter Free Slots ---
+        # Only allow Free slots that DO NOT overlap with Constant blocks
+        for item in daily_items:
+            if item["category"] != "Constant":
+                time_key = item['start'].isoformat()
+                if time_key in seen_times: continue # Skip if processed
 
-                    # 🛑 SEPARATION LOGIC (New)
-                    if category == "Constant":
-                        constant_blocks.append(item)
-                    else:
-                        free_slots.append(item)
+                is_overlapping = False
+                
+                # Check overlap against ALL constant blocks
+                # Overlap Formula: (StartA < EndB) and (EndA > StartB)
+                for occ_start, occ_end in occupied_ranges:
+                    if item["start"] < occ_end and item["end"] > occ_start:
+                        is_overlapping = True
+                        # print(f"   🛡️ Conflict Avoided: '{item['label']}' overlapped with a Constant block.")
+                        break
+                
+                if not is_overlapping:
+                    free_slots.append(item)
+                    seen_times.add(time_key)
 
-                except ValueError as e:
-                    print(f"   ⚠️ Invalid time format in {day_name}: {e}")
-                    
         current += timedelta(days=1)
     
-    # Sort slots by time (Zaroori hai sequence ke liye)
+    # Sort slots by time
     free_slots.sort(key=lambda x: x['start'])
     constant_blocks.sort(key=lambda x: x['start'])
     

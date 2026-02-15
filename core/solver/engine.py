@@ -92,7 +92,6 @@ def run_planner():
     LOOKAHEAD_DAYS = 15 
 
     # FETCH ALL PENDING TASKS (To manage backlog in memory)
-    # Hum limit=100 se sab kuch utha rahe hain taaki hum khud decide karein kis din kya jayega
     current_backlog_pool, _ = architect.get_balanced_batch(limit_per_subject=100)
 
     if not current_backlog_pool:
@@ -109,21 +108,18 @@ def run_planner():
         sync_routine_blocks(fluid_cursor, feed_id, current_date)
 
         # B. Get Slots (NEW: Split into Free & Constant)
-        # utils.py ab tuple return karega
+        # utils.py tuple return karega
         slots_data = flatten_template_to_slots(template, current_date, days_ahead=1)
         
-        # Safety unpacking (in case utils wasn't updated correctly, though we did update it)
         if isinstance(slots_data, tuple):
             free_slots, constant_blocks = slots_data
         else:
-            # Fallback for old utils (should not happen if you updated utils.py)
             free_slots = slots_data
             constant_blocks = []
 
         # C. Insert CONSTANT Blocks (Directly to Calendar) 🟢
-        # Gym, Sleep, Meals - No Solver needed
         for block in constant_blocks:
-            # Duplicate check
+            # Duplicate check by Title + Time
             fluid_cursor.execute("SELECT id FROM CalendarEvent WHERE title = ? AND start LIKE ?", (block['label'], f"{current_date.strftime('%Y-%m-%d')}%"))
             if not fluid_cursor.fetchone():
                 fluid_cursor.execute("INSERT INTO CalendarEvent (id, feedId, title, start, end, allDay, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 0, ?, ?)", 
@@ -133,14 +129,12 @@ def run_planner():
             continue
 
         # D. Get Balanced Batch for TODAY ⚖️
-        # Rule: 1 Task per Subject per Day (Drip Feed)
         day_batch = []
         used_keys = {}
         next_day_pool = []
         
         for task in current_backlog_pool:
             cat = task.get('category', 'General')
-            # Extract Subject Name (First word)
             subject = task['name'].split()[0] if ' ' in task['name'] else 'Gen'
             key = f"{cat}_{subject}"
             
@@ -162,6 +156,25 @@ def run_planner():
             print(f"📅 Scheduling {current_date.strftime('%a, %d %b')}:")
             scheduled_ids = []
             for item in schedule:
+                # 🛡️ FINAL SAFETY CHECK: Is slot truly empty?
+                check_start = to_utc_iso(item['start'] + timedelta(minutes=1)) 
+                check_end = to_utc_iso(item['end'] - timedelta(minutes=1))
+                
+                fluid_cursor.execute("""
+                    SELECT id FROM CalendarEvent 
+                    WHERE feedId = ? 
+                    AND (
+                        (start <= ? AND end >= ?) OR 
+                        (start <= ? AND end >= ?)
+                    )
+                """, (feed_id, check_start, check_start, check_end, check_end))
+                
+                if fluid_cursor.fetchone():
+                    print(f"   ⚠️ SKIPPING OVERLAP: {item['name']} collided with existing event.")
+                    # Is task ko fail maano aur agle din ke liye chhod do
+                    continue
+
+                # Insert if safe
                 event_id = str(uuid.uuid4())
                 fluid_cursor.execute("INSERT INTO CalendarEvent (id, feedId, title, start, end, allDay, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 0, ?, ?)", 
                                      (event_id, feed_id, item['name'], to_utc_iso(item['start']), to_utc_iso(item['end']), to_iso_now(), to_iso_now()))
@@ -173,12 +186,10 @@ def run_planner():
                 scheduled_ids.append(item['task_id'])
                 total_scheduled += 1
             
-            # Update backlog: Removed scheduled tasks, keep the rest for tomorrow
-            # Jo day_batch mein the par fit nahi huye (no slot), wo wapas pool ke top pe
+            # Update backlog: keep leftovers for tomorrow
             failed_to_fit = [t for t in day_batch if t['id'] not in scheduled_ids]
             current_backlog_pool = failed_to_fit + next_day_pool
         else:
-            # Nothing fit today, try all tomorrow
             current_backlog_pool = day_batch + next_day_pool
 
     # 5. FINAL COMMIT
